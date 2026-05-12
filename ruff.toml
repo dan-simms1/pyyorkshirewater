@@ -1,0 +1,36 @@
+target-version = "py311"
+line-length = 100
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # bugbear
+    "UP",  # pyupgrade
+    "N",   # pep8 naming
+    "SIM", # simplify
+    "RUF", # ruff specific
+    "ASYNC",
+    "PT",  # pytest style
+    "PIE",
+    "RET",
+    "TID",
+    "TRY",
+    "ANN", # type annotations
+    "D",   # pydocstyle
+]
+ignore = [
+    "ANN401",  # Allow typing.Any in narrow places.
+    "D203",    # Blank line before class docstring conflicts with D211.
+    "D212",    # Multi-line summary on first line conflicts with D213.
+    "TRY003",  # Long error messages outside the exception class are acceptable here.
+    "D100",    # Missing module docstring is permitted on small internal modules.
+]
+
+[lint.pydocstyle]
+convention = "google"
+
+[lint.per-file-ignores]
+"tests/**" = ["D", "ANN", "S101"]
