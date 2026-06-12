@@ -3,6 +3,31 @@
 All notable changes to `pyyorkshirewater` are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-06-12
+
+### Fixed
+
+- **Consumption endpoints now send the correct query parameter**. The
+  four consumption methods (`get_current_consumption`, `get_your_usage`,
+  `get_daily_consumption`, `get_yearly_consumption`) were sending
+  `accountReference=` on the wire, but the server requires
+  `meterReference=` on these endpoints. The previous behaviour returned
+  HTTP 400 from the API as soon as the path bug from 1.1.0 was fixed.
+  Discovered against a live meter on 2026-06-12 after upgrading to
+  1.1.0 and seeing `400 Bad Request` in the integration logs.
+
+### Changed
+
+- **`account_reference=` kwarg removed from the four consumption
+  methods.** It was always being sent as the wrong query parameter, so
+  no caller could have been depending on it producing correct results.
+  Replaced with `meter_reference=` (the 10-digit meter reference the
+  server actually wants). By default the methods use the meter
+  reference cached from the most recent `get_meter_details()` call
+  (which `login()` runs automatically). For multi-property accounts,
+  call `get_meter_details(account_reference=...)` per property and pass
+  the returned `meter_reference` explicitly.
+
 ## [1.1.0] - 2026-06-12
 
 ### Fixed

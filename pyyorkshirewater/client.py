@@ -203,41 +203,62 @@ class YorkshireWaterClient:
     async def get_current_consumption(
         self,
         *,
-        account_reference: str | None = None,
+        meter_reference: str | None = None,
     ) -> CurrentConsumption:
         """GET /smartmeter/current-consumption.
 
-        Yorkshire Water returns 404 for accounts with no smart meter yet.
-        Same handling as `get_meter_details`: return an empty object so the
-        caller's logic stays straightforward.
+        The endpoint requires a `meterReference` query parameter. When
+        called without one, defaults to the meter reference cached from
+        the most recent `get_meter_details()` call (the one `login()`
+        makes automatically). Pre-LIVE meters return 404 here, which we
+        translate into an empty `CurrentConsumption` so callers can
+        drive UI from `meter_status` rather than from exceptions.
 
-        For multi-property accounts, pass the long opaque
-        `account_reference` to scope the call.
+        For multi-property accounts, fetch `get_meter_details(
+        account_reference=...)` first to obtain that property's
+        `meter_reference`, then pass it explicitly.
         """
-        params = _build_query({"accountReference": account_reference})
+        # Probe semantics: when there's no cached meter (e.g. login()
+        # ran but meter-details returned 404), return an empty object
+        # rather than raising. Callers consume `meter_status` to know
+        # whether the meter is live.
+        if meter_reference is None and (
+            not self._meter_details or not self._meter_details.meter_reference
+        ):
+            empty = CurrentConsumption.from_api({})
+            self._current_consumption = empty
+            return empty
+
+        resolved = self._resolve_meter_reference(meter_reference)
+        params = {"meterReference": resolved}
         try:
             payload = await self._get(ENDPOINT_CURRENT_CONSUMPTION, params=params)
         except YorkshireWaterAPIError as err:
             if err.status_code == 404:
                 empty = CurrentConsumption.from_api({})
-                if account_reference is None:
+                if meter_reference is None:
                     self._current_consumption = empty
                 return empty
             raise
         consumption = CurrentConsumption.from_api(_first_dict(payload))
-        if account_reference is None:
+        if meter_reference is None:
             self._current_consumption = consumption
         return consumption
 
     async def get_your_usage(
         self,
         *,
-        account_reference: str | None = None,
+        meter_reference: str | None = None,
     ) -> list[UsagePeriod]:
-        """GET /smartmeter/your-usage."""
-        if account_reference is None:
+        """GET /smartmeter/your-usage.
+
+        Defaults to the cached meter reference when called without one.
+        See `get_current_consumption` for the multi-property pattern.
+        """
+        if meter_reference is None:
             self._require_live_meter()
-        params = _build_query({"accountReference": account_reference})
+        resolved = self._resolve_meter_reference(meter_reference)
+        params = {"meterReference": resolved}
         payload = await self._get(ENDPOINT_YOUR_USAGE, params=params)
         if isinstance(payload, list):
             return [UsagePeriod.from_api(p) for p in payload if isinstance(p, dict)]
@@ -253,20 +274,22 @@ class YorkshireWaterClient:
         start_date: str | None = None,
         end_date: str | None = None,
         unit: str = UNIT_LITRES,
-        account_reference: str | None = None,
+        meter_reference: str | None = None,
     ) -> list[DailyConsumptionPoint]:
         """GET /smartmeter/daily-consumption.
 
+        Defaults to the cached meter reference when called without one.
         ASSUMPTION: query parameters are `startDate`, `endDate` and `unit`.
         Confirm against the live API once a meter is reporting.
         """
-        if account_reference is None:
+        if meter_reference is None:
             self._require_live_meter()
+        resolved = self._resolve_meter_reference(meter_reference)
         params = _build_query({
             "startDate": start_date,
             "endDate": end_date,
             "unit": unit,
-            "accountReference": account_reference,
+            "meterReference": resolved,
         })
         payload = await self._get(ENDPOINT_DAILY_CONSUMPTION, params=params)
         return [DailyConsumptionPoint.from_api(p) for p in _iter_points(payload)]
@@ -275,17 +298,39 @@ class YorkshireWaterClient:
         self,
         *,
         unit: str = UNIT_LITRES,
-        account_reference: str | None = None,
+        meter_reference: str | None = None,
     ) -> list[YearlyConsumptionPoint]:
-        """GET /smartmeter/yearly-consumption."""
-        if account_reference is None:
+        """GET /smartmeter/yearly-consumption.
+
+        Defaults to the cached meter reference when called without one.
+        """
+        if meter_reference is None:
             self._require_live_meter()
+        resolved = self._resolve_meter_reference(meter_reference)
         params = _build_query({
             "unit": unit,
-            "accountReference": account_reference,
+            "meterReference": resolved,
         })
         payload = await self._get(ENDPOINT_YEARLY_CONSUMPTION, params=params)
         return [YearlyConsumptionPoint.from_api(p) for p in _iter_points(payload)]
+
+    def _resolve_meter_reference(self, override: str | None) -> str:
+        """Return the meterReference to use for a consumption-endpoint call.
+
+        Returns `override` if supplied, otherwise the meter reference
+        cached from the most recent `get_meter_details()` call. Raises
+        `YorkshireWaterMeterNotReadyError` if neither source has a value,
+        which is the same error type already used elsewhere when the
+        meter is not yet commissioned.
+        """
+        if override is not None:
+            return override
+        if self._meter_details and self._meter_details.meter_reference:
+            return self._meter_details.meter_reference
+        raise YorkshireWaterMeterNotReadyError(
+            "No meter reference is available. Call get_meter_details() "
+            "first (or pass meter_reference= explicitly).",
+        )
 
     async def get_customer(self) -> Customer:
         """GET /api/account/customer/detail.
