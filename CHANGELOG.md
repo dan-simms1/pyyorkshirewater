@@ -3,6 +3,47 @@
 All notable changes to `pyyorkshirewater` are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-06-12
+
+### Changed (breaking)
+
+- **`UsagePeriod` rewritten to match the real API shape**. The previous
+  fields (`period_total_litres`, `daily_litres_average`, `daily_points`
+  etc.) were inferred from the SPA bundle and did not match what
+  `/your-usage` actually returns. Replaced with the empirically-verified
+  fields: `month`, `total_consumption_litres`, `clean_water_cost`,
+  `sewerage_cost`, `total_cost_including_sewerage`, `estimated_day_count`,
+  `missing_day_count`. Each entry in the array is now a single month's
+  summary.
+
+- **`YearlyConsumptionPoint` renamed and rewritten as `YearlyConsumption`**.
+  The endpoint returns one summary object per year, not an array of
+  yearly points. `get_yearly_consumption(...)` now takes a required
+  `year: int` query parameter and returns `YearlyConsumption | None`.
+  The new model exposes year-to-date totals, monthly averages, and the
+  monthly breakdown (`monthly_consumption: list[UsagePeriod]`).
+
+- The `unit` keyword on `get_yearly_consumption` is removed; the endpoint
+  ignores it.
+
+### Added
+
+- `CurrentConsumption.latest_data_date` and `.latest_update_date`
+  (`date | None`), parsed from the API's US-style "M/D/YYYY" strings.
+  Used by Home Assistant to surface a "last reading" timestamp sensor
+  without depending on the still-unsolved `/daily-consumption` endpoint.
+
+- `ContinuousFlowAlarm.continuous_flow_l_per_h` (leak rate) and
+  `.cost_per_day` (projected daily cost while leak is active).
+
+### Notes
+
+- `/daily-consumption` remains an open problem: every documented
+  parameter shape (single date, range, US format, alt names) returns
+  `400 "Invalid date range."`. Probing continues out-of-band; for now
+  `get_daily_consumption` is unchanged from 1.2 but unlikely to
+  succeed against the live API.
+
 ## [1.2.0] - 2026-06-12
 
 ### Fixed

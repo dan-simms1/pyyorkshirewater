@@ -143,7 +143,7 @@ async def test_consumption_endpoints_require_live_meter(client: YorkshireWaterCl
     with pytest.raises(YorkshireWaterMeterNotReadyError):
         await client.get_daily_consumption()
     with pytest.raises(YorkshireWaterMeterNotReadyError):
-        await client.get_yearly_consumption()
+        await client.get_yearly_consumption(year=2026)
 
 
 @pytest.mark.asyncio
@@ -182,7 +182,7 @@ async def test_get_daily_consumption_passes_query_params(client: YorkshireWaterC
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_yearly_consumption_unwraps_envelope(client: YorkshireWaterClient) -> None:
+async def test_yearly_consumption_returns_summary(client: YorkshireWaterClient) -> None:
     _wire_silent_renewal_routes()
     respx.get(f"{API_BASE_URL}{ENDPOINT_METER_DETAILS}").mock(
         return_value=httpx.Response(200, json=_meter_payload(with_meter=True)),
@@ -190,18 +190,38 @@ async def test_yearly_consumption_unwraps_envelope(client: YorkshireWaterClient)
     respx.get(f"{API_BASE_URL}{ENDPOINT_CURRENT_CONSUMPTION}").mock(
         return_value=httpx.Response(200, json=_consumption_payload(live=True)),
     )
-    respx.get(f"{API_BASE_URL}{ENDPOINT_YEARLY_CONSUMPTION}").mock(
+    yearly_route = respx.get(f"{API_BASE_URL}{ENDPOINT_YEARLY_CONSUMPTION}").mock(
         return_value=httpx.Response(
             200,
-            json={"data": [{"year": 2025, "consumption": 100000}]},
+            json={
+                "year": 2026,
+                "meterReference": "WAKE-001",
+                "totalConsumption": 26315,
+                "totalCost": 123.13,
+                "totalStandardTariffCleanWaterCost": 55.57,
+                "totalStandardTariffSewerageCost": 67.56,
+                "monthlyLitresAverageForYear": 4385.83,
+                "monthlyCostAverageForYear": 9.26,
+                "monthlyConsumption": [
+                    {"month": "06", "totalConsumptionLitres": "8055"},
+                ],
+            },
         ),
     )
 
     await client.login()
-    points = await client.get_yearly_consumption()
+    summary = await client.get_yearly_consumption(year=2026)
 
-    assert len(points) == 1
-    assert points[0].year == 2025
+    assert summary is not None
+    assert summary.year == 2026
+    assert summary.total_consumption_litres == 26315
+    assert summary.total_cost == 123.13
+    assert summary.total_clean_water_cost == 55.57
+    assert summary.total_sewerage_cost == 67.56
+    assert len(summary.monthly_consumption) == 1
+    request_url = yearly_route.calls.last.request.url
+    assert request_url.params["year"] == "2026"
+    assert request_url.params["meterReference"] == "WAKE-001"
 
 
 @pytest.mark.asyncio

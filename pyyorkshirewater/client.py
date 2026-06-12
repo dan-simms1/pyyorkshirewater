@@ -55,7 +55,7 @@ from .models import (
     PropertiesPage,
     Property,
     UsagePeriod,
-    YearlyConsumptionPoint,
+    YearlyConsumption,
 )
 
 _LOGGER = logging.getLogger(PACKAGE_NAME)
@@ -297,22 +297,36 @@ class YorkshireWaterClient:
     async def get_yearly_consumption(
         self,
         *,
-        unit: str = UNIT_LITRES,
+        year: int,
         meter_reference: str | None = None,
-    ) -> list[YearlyConsumptionPoint]:
+    ) -> YearlyConsumption | None:
         """GET /smartmeter/yearly-consumption.
 
-        Defaults to the cached meter reference when called without one.
+        The endpoint requires both `meterReference` and `year` as query
+        parameters. Returns a single `YearlyConsumption` summary for
+        that year, including the monthly breakdown, year-to-date
+        totals and per-month averages.
+
+        Defaults to the cached meter reference when called without
+        one. Returns None if the meter has no data for the requested
+        year (the endpoint returns 404).
         """
         if meter_reference is None:
             self._require_live_meter()
         resolved = self._resolve_meter_reference(meter_reference)
-        params = _build_query({
-            "unit": unit,
+        params = {
             "meterReference": resolved,
-        })
-        payload = await self._get(ENDPOINT_YEARLY_CONSUMPTION, params=params)
-        return [YearlyConsumptionPoint.from_api(p) for p in _iter_points(payload)]
+            "year": str(year),
+        }
+        try:
+            payload = await self._get(ENDPOINT_YEARLY_CONSUMPTION, params=params)
+        except YorkshireWaterAPIError as err:
+            if err.status_code == 404:
+                return None
+            raise
+        if not isinstance(payload, dict):
+            return None
+        return YearlyConsumption.from_api(payload)
 
     def _resolve_meter_reference(self, override: str | None) -> str:
         """Return the meterReference to use for a consumption-endpoint call.

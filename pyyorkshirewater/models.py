@@ -53,6 +53,28 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return None
 
 
+def _parse_us_date(value: Any) -> date | None:
+    """Parse a US-style "M/D/YYYY" date string.
+
+    Used by `current-consumption` for `latestDataDate` and
+    `latestUpdateDate`. Tolerates ISO-style input too so older
+    snapshots still load.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    text = value.strip()
+    for fmt in ("%m/%d/%Y", "%-m/%-d/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    # Last-ditch: tolerate timestamps.
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
 @dataclass(slots=True)
 class MeterDetails:
     """Response shape of GET /smartmeter/meter-details."""
@@ -77,9 +99,17 @@ class MeterDetails:
 
 @dataclass(slots=True)
 class ContinuousFlowAlarm:
-    """One entry in `currentContinuousFlowAlarmDetails`."""
+    """One entry in `currentContinuousFlowAlarmDetails`.
+
+    `continuous_flow_l_per_h` is the measured leak rate in litres per
+    hour. `cost_per_day` is YW's standard-tariff projection of what
+    that leak rate costs per 24 h. Both are zero when the alarm is
+    not active.
+    """
 
     alarm_start: datetime | None
+    continuous_flow_l_per_h: float | None
+    cost_per_day: float | None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -87,17 +117,31 @@ class ContinuousFlowAlarm:
         """Build a `ContinuousFlowAlarm` from the raw API payload."""
         return cls(
             alarm_start=_parse_datetime(payload.get("alarmStartDate")),
+            continuous_flow_l_per_h=_coerce_float(payload.get("continuousFlowLperH")),
+            cost_per_day=_coerce_float(
+                payload.get("continuousFlowStandardTariffCostPerDay"),
+            ),
             raw=payload,
         )
 
 
 @dataclass(slots=True)
 class CurrentConsumption:
-    """Response shape of GET /smartmeter/current-consumption."""
+    """Response shape of GET /smartmeter/current-consumption.
+
+    `latest_data_date` is the timestamp of the most recent meter
+    reading YW has on file. `latest_update_date` is when YW's
+    aggregation pipeline last refreshed the summary. Verified
+    empirically against a live meter on 2026-06-12; the API
+    returns these as US-style "M/D/YYYY" strings which we parse
+    into `date` for downstream typing.
+    """
 
     is_meter_bau: bool
     continuous_flow_alarm_state: bool
     continuous_flow_alarm_details: list[ContinuousFlowAlarm]
+    latest_data_date: date | None
+    latest_update_date: date | None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -110,10 +154,14 @@ class CurrentConsumption:
             details_raw = []
         return cls(
             is_meter_bau=bool(payload.get("isMeterBau", False)),
-            continuous_flow_alarm_state=bool(payload.get("currentContinuousFlowAlarmState", False)),
+            continuous_flow_alarm_state=bool(
+                payload.get("currentContinuousFlowAlarmState", False),
+            ),
             continuous_flow_alarm_details=[
                 ContinuousFlowAlarm.from_api(d) for d in details_raw if isinstance(d, dict)
             ],
+            latest_data_date=_parse_us_date(payload.get("latestDataDate")),
+            latest_update_date=_parse_us_date(payload.get("latestUpdateDate")),
             raw=payload,
         )
 
@@ -136,6 +184,14 @@ def _coerce_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _coerce_str(value: Any) -> str | None:
+    """Coerce to str, treating None and empty string as missing."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _coerce_bool(value: Any) -> bool:
@@ -194,81 +250,89 @@ class DailyConsumptionPoint:
 
 @dataclass(slots=True)
 class UsagePeriod:
-    """One entry in the `your-usage` array.
+    """One month entry in the `your-usage` array.
 
-    Each period (current, previous, prior) carries period-level totals,
-    daily averages and the per-day breakdown. Field names mirror the
-    SPA's expected response shape per static bundle analysis.
+    Verified empirically on 2026-06-12 against a live meter. Field
+    shape: each entry is a single month's summary - the array holds
+    one entry per month for which YW has data.
     """
 
-    period_total_litres: float | None
-    period_total_consumption_m3: float | None
-    period_total_cost: float | None
-    period_total_cost_including_sewerage: float | None
-    period_total_clean_water_cost: float | None
-    period_total_sewerage_cost: float | None
-    daily_litres_average: float | None
-    daily_cost_average: float | None
-    daily_points: list[DailyConsumptionPoint]
+    month: str | None
+    total_consumption_litres: float | None
+    clean_water_cost: float | None
+    sewerage_cost: float | None
+    total_cost_including_sewerage: float | None
+    estimated_day_count: int | None
+    missing_day_count: int | None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_api(cls, payload: dict[str, Any]) -> UsagePeriod:
         """Build a `UsagePeriod` from the raw API payload."""
-        days_raw = payload.get("dailyValues") or payload.get("days") or []
-        if not isinstance(days_raw, list):
-            days_raw = []
         return cls(
-            period_total_litres=_coerce_float(payload.get("totalLitres")),
-            period_total_consumption_m3=_coerce_float(payload.get("totalConsumption")),
-            period_total_cost=_coerce_float(payload.get("totalCost")),
-            period_total_cost_including_sewerage=_coerce_float(
+            month=_coerce_str(payload.get("month")),
+            total_consumption_litres=_coerce_float(payload.get("totalConsumptionLitres")),
+            clean_water_cost=_coerce_float(payload.get("standardTariffCleanWaterCost")),
+            sewerage_cost=_coerce_float(payload.get("standardTariffSewerageCost")),
+            total_cost_including_sewerage=_coerce_float(
                 payload.get("totalCostIncludingSewerage"),
             ),
-            period_total_clean_water_cost=_coerce_float(
-                payload.get("totalStandardTariffCleanWaterCost")
-                or payload.get("totalCleanWaterCost"),
-            ),
-            period_total_sewerage_cost=_coerce_float(
-                payload.get("totalStandardTariffSewerageCost")
-                or payload.get("totalSewerageCost"),
-            ),
-            daily_litres_average=_coerce_float(payload.get("dailyLitresAverage")),
-            daily_cost_average=_coerce_float(payload.get("dailyCostAverage")),
-            daily_points=[
-                DailyConsumptionPoint.from_api(d) for d in days_raw if isinstance(d, dict)
-            ],
+            estimated_day_count=_coerce_int(payload.get("estimatedDayCount")),
+            missing_day_count=_coerce_int(payload.get("missingDayCount")),
             raw=payload,
         )
 
 
 @dataclass(slots=True)
-class YearlyConsumptionPoint:
-    """One year in the `yearly-consumption` time series.
+class YearlyConsumption:
+    """Response shape of GET /smartmeter/yearly-consumption.
 
-    Field names mirror the per-day shape; for a year point
-    `totalConsumption` is the annual cubic-metre figure (per the SPA's
-    YEAR view that prefers `totalConsumption` over `totalLitres`).
+    The endpoint requires `year` as a query parameter and returns a
+    single object summarising that year, plus a monthly breakdown.
+    `total_consumption_litres` is in LITRES despite the API naming
+    it `totalConsumption` (empirically confirmed: May 18260 + June
+    8055 = 26315 = totalConsumption value returned).
+
+    Verified empirically on 2026-06-12 against a live meter.
     """
 
     year: int | None
+    meter_reference: str | None
     total_consumption_litres: float | None
-    total_consumption_m3: float | None
+    total_clean_water_cost: float | None
+    total_sewerage_cost: float | None
     total_cost: float | None
-    total_cost_including_sewerage: float | None
+    monthly_litres_average: float | None
+    monthly_cost_average: float | None
+    monthly_consumption: list[UsagePeriod]
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
-    def from_api(cls, payload: dict[str, Any]) -> YearlyConsumptionPoint:
-        """Build a `YearlyConsumptionPoint` from the raw API payload."""
+    def from_api(cls, payload: dict[str, Any]) -> YearlyConsumption:
+        """Build a `YearlyConsumption` from the raw API payload."""
+        monthly_raw = payload.get("monthlyConsumption") or []
+        if not isinstance(monthly_raw, list):
+            monthly_raw = []
         return cls(
             year=_coerce_int(payload.get("year")),
-            total_consumption_litres=_coerce_float(payload.get("totalLitres")),
-            total_consumption_m3=_coerce_float(payload.get("totalConsumption")),
-            total_cost=_coerce_float(payload.get("totalCost")),
-            total_cost_including_sewerage=_coerce_float(
-                payload.get("totalCostIncludingSewerage"),
+            meter_reference=payload.get("meterReference") or None,
+            total_consumption_litres=_coerce_float(payload.get("totalConsumption")),
+            total_clean_water_cost=_coerce_float(
+                payload.get("totalStandardTariffCleanWaterCost"),
             ),
+            total_sewerage_cost=_coerce_float(
+                payload.get("totalStandardTariffSewerageCost"),
+            ),
+            total_cost=_coerce_float(payload.get("totalCost")),
+            monthly_litres_average=_coerce_float(
+                payload.get("monthlyLitresAverageForYear"),
+            ),
+            monthly_cost_average=_coerce_float(
+                payload.get("monthlyCostAverageForYear"),
+            ),
+            monthly_consumption=[
+                UsagePeriod.from_api(m) for m in monthly_raw if isinstance(m, dict)
+            ],
             raw=payload,
         )
 

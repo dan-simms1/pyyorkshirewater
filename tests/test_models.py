@@ -14,7 +14,7 @@ from pyyorkshirewater.models import (
     MeterStatus,
     TokenSet,
     UsagePeriod,
-    YearlyConsumptionPoint,
+    YearlyConsumption,
 )
 
 
@@ -133,9 +133,9 @@ def test_daily_consumption_point_accepts_alt_sewerage_field_names() -> None:
     assert p3.total_cost_including_sewerage == 1.0
 
 
-def test_yearly_consumption_point_preserves_zero() -> None:
-    point = YearlyConsumptionPoint.from_api({"year": 2025, "totalLitres": 0})
-    assert point.total_consumption_litres == 0.0
+def test_yearly_consumption_preserves_zero() -> None:
+    summary = YearlyConsumption.from_api({"year": 2025, "totalConsumption": 0})
+    assert summary.total_consumption_litres == 0.0
 
 
 def test_continuous_flow_alarm_skips_non_dict_entries() -> None:
@@ -180,49 +180,53 @@ def test_token_set_repr_does_not_leak_secrets() -> None:
     assert "super-secret-refresh" not in representation
 
 
-def test_yearly_consumption_point() -> None:
-    point = YearlyConsumptionPoint.from_api({
-        "year": "2026",
-        "totalLitres": "4567",
-        "totalConsumption": "4.567",
-        "totalCost": "1234.56",
-    })
-    assert point.year == 2026
-    assert point.total_consumption_litres == pytest.approx(4567)
-    assert point.total_consumption_m3 == pytest.approx(4.567)
-    assert point.total_cost == pytest.approx(1234.56)
-
-
-def test_usage_period_parses_period_totals_and_days() -> None:
-    payload = {
-        "totalLitres": "10000",
-        "totalConsumption": "10.0",
-        "totalCost": "4523.0",
-        "totalCostIncludingSewerage": "7800.0",
-        "totalStandardTariffCleanWaterCost": "4523.0",
-        "totalStandardTariffSewerageCost": "3277.0",
-        "dailyLitresAverage": "333.3",
-        "dailyCostAverage": "150.7",
-        "dailyValues": [
-            {"date": "2026-05-04", "totalConsumptionLitres": 100},
-            {"date": "2026-05-05", "totalConsumptionLitres": 110},
-            "ignored",
-            None,
+def test_yearly_consumption_parses_real_api_shape() -> None:
+    """Empirically verified shape captured on 2026-06-12 against a live meter."""
+    summary = YearlyConsumption.from_api({
+        "year": 2026,
+        "meterReference": "WAKE-001",
+        "totalConsumption": 26315,
+        "totalCost": 123.13,
+        "totalStandardTariffCleanWaterCost": 55.57,
+        "totalStandardTariffSewerageCost": 67.56,
+        "monthlyLitresAverageForYear": 4385.83,
+        "monthlyCostAverageForYear": 9.26,
+        "monthlyConsumption": [
+            {"month": "06", "totalConsumptionLitres": "8055"},
+            {"month": "05", "totalConsumptionLitres": "18260"},
         ],
+    })
+    assert summary.year == 2026
+    assert summary.meter_reference == "WAKE-001"
+    assert summary.total_consumption_litres == pytest.approx(26315)
+    assert summary.total_cost == pytest.approx(123.13)
+    assert summary.total_clean_water_cost == pytest.approx(55.57)
+    assert summary.total_sewerage_cost == pytest.approx(67.56)
+    assert summary.monthly_litres_average == pytest.approx(4385.83)
+    assert summary.monthly_cost_average == pytest.approx(9.26)
+    assert len(summary.monthly_consumption) == 2
+    assert summary.monthly_consumption[0].month == "06"
+
+
+def test_usage_period_parses_monthly_summary() -> None:
+    """Empirically verified shape captured on 2026-06-12 against a live meter."""
+    payload = {
+        "month": "06",
+        "totalConsumptionLitres": "8055",
+        "standardTariffCleanWaterCost": 17.02,
+        "standardTariffSewerageCost": 20.69,
+        "estimatedDayCount": 3,
+        "missingDayCount": 0,
+        "totalCostIncludingSewerage": 37.71,
     }
     period = UsagePeriod.from_api(payload)
-    assert period.period_total_litres == pytest.approx(10000)
-    assert period.period_total_consumption_m3 == pytest.approx(10.0)
-    assert period.period_total_cost == pytest.approx(4523.0)
-    assert period.period_total_cost_including_sewerage == pytest.approx(7800.0)
-    assert period.period_total_clean_water_cost == pytest.approx(4523.0)
-    assert period.period_total_sewerage_cost == pytest.approx(3277.0)
-    assert period.daily_litres_average == pytest.approx(333.3)
-    assert period.daily_cost_average == pytest.approx(150.7)
-    # The two non-dict entries in dailyValues are filtered out.
-    assert len(period.daily_points) == 2
-    assert period.daily_points[0].total_consumption_litres == 100
-    assert period.daily_points[1].total_consumption_litres == 110
+    assert period.month == "06"
+    assert period.total_consumption_litres == pytest.approx(8055)
+    assert period.clean_water_cost == pytest.approx(17.02)
+    assert period.sewerage_cost == pytest.approx(20.69)
+    assert period.total_cost_including_sewerage == pytest.approx(37.71)
+    assert period.estimated_day_count == 3
+    assert period.missing_day_count == 0
     assert period.raw == payload
 
 

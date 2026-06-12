@@ -38,10 +38,10 @@ from .models import (
     Property,
     TokenSet,
     UsagePeriod,
-    YearlyConsumptionPoint,
+    YearlyConsumption,
 )
 
-__version__ = "0.4.0"
+__version__ = "1.3.0"
 
 __all__ = [
     "IDP_COOKIE_DOMAIN",
@@ -58,7 +58,7 @@ __all__ = [
     "Property",
     "TokenSet",
     "UsagePeriod",
-    "YearlyConsumptionPoint",
+    "YearlyConsumption",
     "YorkshireWaterAPIError",
     "YorkshireWaterAuthError",
     "YorkshireWaterClient",
