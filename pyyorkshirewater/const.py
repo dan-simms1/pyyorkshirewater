@@ -40,17 +40,21 @@ API_BASE_URL: Final = "https://my.yorkshirewater.com/api"
 
 # Smart meter endpoints under API_BASE_URL.
 #
-# Smart meter endpoints sit at `/api/smartmeter/...` and are scoped to
-# the customer's "current" property by the server. For multi-property
-# accounts the scope is selected via the optional `accountReference`
-# query parameter (the long opaque token, not the human-readable
-# display number). The library exposes that scope as an
-# `account_reference=` keyword argument on each method.
-ENDPOINT_METER_DETAILS: Final = "/smartmeter/meter-details"
-ENDPOINT_CURRENT_CONSUMPTION: Final = "/smartmeter/current-consumption"
-ENDPOINT_YOUR_USAGE: Final = "/smartmeter/your-usage"
-ENDPOINT_DAILY_CONSUMPTION: Final = "/smartmeter/daily-consumption"
-ENDPOINT_YEARLY_CONSUMPTION: Final = "/smartmeter/yearly-consumption"
+# Smart meter endpoints sit at `/api/account/smartmeter/...` and are
+# scoped to the customer's "current" property by the server. For
+# multi-property accounts the scope is selected via the optional
+# `accountReference` query parameter. The library exposes that scope
+# as an `account_reference=` keyword argument on each method.
+#
+# Verified empirically on 2026-06-12 by capturing the SPA's own XHR
+# traffic while the customer's meter was live. Before that date the
+# library used `/smartmeter/...` (no `/account/` segment), which 404'd
+# silently and left every metered customer stuck at MeterStatus.NO_METER.
+ENDPOINT_METER_DETAILS: Final = "/account/smartmeter/meter-details"
+ENDPOINT_CURRENT_CONSUMPTION: Final = "/account/smartmeter/current-consumption"
+ENDPOINT_YOUR_USAGE: Final = "/account/smartmeter/your-usage"
+ENDPOINT_DAILY_CONSUMPTION: Final = "/account/smartmeter/daily-consumption"
+ENDPOINT_YEARLY_CONSUMPTION: Final = "/account/smartmeter/yearly-consumption"
 
 # Account / customer endpoints under API_BASE_URL. These all sit
 # under `/api/account/...` (verified empirically on 2026-05-07).

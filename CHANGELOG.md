@@ -3,6 +3,26 @@
 All notable changes to `pyyorkshirewater` are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-06-12
+
+### Fixed
+
+- **Smart-meter endpoint paths corrected**. The five `/smartmeter/*`
+  endpoint constants were missing the `/account/` URL segment. The
+  client was calling `https://my.yorkshirewater.com/api/smartmeter/...`,
+  which 404s; the SPA actually calls `/api/account/smartmeter/...`. The
+  `get_meter_details` and `get_current_consumption` methods catch 404
+  and return empty objects, so the bug surfaced as `MeterStatus.NO_METER`
+  for every metered customer rather than as a visible error. Discovered
+  by capturing the SPA's XHR traffic against a live meter.
+
+### Operational notes
+
+- Anyone running v1.0.0 saw `MeterStatus.NO_METER` regardless of meter
+  state. After upgrading, callers may immediately get a `LIVE` meter
+  status and the previously silent consumption endpoints will start
+  returning data.
+
 ## [1.0.0] - 2026-05-12
 
 First stable public release.
