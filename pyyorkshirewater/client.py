@@ -17,6 +17,7 @@ A typical use looks like:
 from __future__ import annotations
 
 import logging
+from datetime import date
 from types import TracebackType
 from typing import Any, Self
 
@@ -39,7 +40,6 @@ from .const import (
     ENDPOINT_YEARLY_CONSUMPTION,
     ENDPOINT_YOUR_USAGE,
     PACKAGE_NAME,
-    UNIT_LITRES,
 )
 from .exceptions import (
     YorkshireWaterAPIError,
@@ -271,28 +271,62 @@ class YorkshireWaterClient:
     async def get_daily_consumption(
         self,
         *,
-        start_date: str | None = None,
-        end_date: str | None = None,
-        unit: str = UNIT_LITRES,
+        start_date: str,
+        end_date: str,
+        move_in_date: str | None = None,
+        move_out_date: str | None = None,
+        time_period: int = 1,
         meter_reference: str | None = None,
     ) -> list[DailyConsumptionPoint]:
         """GET /smartmeter/daily-consumption.
 
-        Defaults to the cached meter reference when called without one.
-        ASSUMPTION: query parameters are `startDate`, `endDate` and `unit`.
-        Confirm against the live API once a meter is reporting.
+        Verified empirically on 2026-06-13. Required query parameters
+        are `meterReference`, `startDate` (YYYY-MM-DD), `endDate`
+        (YYYY-MM-DD), `moveInDate` (the customer's move-in date,
+        practically the meter's `start_date`), `moveOutDate` (today
+        for active customers) and `timePeriod` (1 for daily). The
+        response wrapper carries window totals plus a `dailyUsageData`
+        list of per-day records; we expose just the per-day list.
+
+        `move_in_date` defaults to the cached meter details' `start_date`
+        (set by login()). `move_out_date` defaults to today (UTC).
         """
         if meter_reference is None:
             self._require_live_meter()
         resolved = self._resolve_meter_reference(meter_reference)
-        params = _build_query({
+
+        if move_in_date is None:
+            if self._meter_details and self._meter_details.start_date:
+                move_in_date = self._meter_details.start_date.isoformat()
+            else:
+                raise YorkshireWaterMeterNotReadyError(
+                    "move_in_date is required. Pass it explicitly or "
+                    "call get_meter_details() first so it can be "
+                    "derived from the cached meter details.",
+                )
+        if move_out_date is None:
+            move_out_date = date.today().isoformat()
+
+        params = {
+            "meterReference": resolved,
             "startDate": start_date,
             "endDate": end_date,
-            "unit": unit,
-            "meterReference": resolved,
-        })
+            "moveInDate": move_in_date,
+            "moveOutDate": move_out_date,
+            "timePeriod": str(time_period),
+        }
         payload = await self._get(ENDPOINT_DAILY_CONSUMPTION, params=params)
-        return [DailyConsumptionPoint.from_api(p) for p in _iter_points(payload)]
+        if isinstance(payload, dict):
+            days_raw = payload.get("dailyUsageData") or []
+            if not isinstance(days_raw, list):
+                days_raw = []
+        else:
+            days_raw = payload if isinstance(payload, list) else []
+        return [
+            DailyConsumptionPoint.from_api(p)
+            for p in days_raw
+            if isinstance(p, dict)
+        ]
 
     async def get_yearly_consumption(
         self,
@@ -536,17 +570,6 @@ def _first_dict(payload: Any) -> dict[str, Any]:
     if isinstance(payload, list) and payload and isinstance(payload[0], dict):
         return payload[0]
     return {}
-
-
-def _iter_points(payload: Any) -> list[dict[str, Any]]:
-    """Pull a list of dict points out of a possibly-wrapped response."""
-    if isinstance(payload, list):
-        return [p for p in payload if isinstance(p, dict)]
-    if isinstance(payload, dict):
-        for value in payload.values():
-            if isinstance(value, list):
-                return [p for p in value if isinstance(p, dict)]
-    return []
 
 
 def _build_query(params: dict[str, str | None]) -> dict[str, str]:

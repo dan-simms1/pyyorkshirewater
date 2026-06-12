@@ -141,7 +141,10 @@ async def test_consumption_endpoints_require_live_meter(client: YorkshireWaterCl
     with pytest.raises(YorkshireWaterMeterNotReadyError):
         await client.get_your_usage()
     with pytest.raises(YorkshireWaterMeterNotReadyError):
-        await client.get_daily_consumption()
+        await client.get_daily_consumption(
+            start_date="2026-06-01",
+            end_date="2026-06-13",
+        )
     with pytest.raises(YorkshireWaterMeterNotReadyError):
         await client.get_yearly_consumption(year=2026)
 
@@ -159,10 +162,13 @@ async def test_get_daily_consumption_passes_query_params(client: YorkshireWaterC
     daily_route = respx.get(f"{API_BASE_URL}{ENDPOINT_DAILY_CONSUMPTION}").mock(
         return_value=httpx.Response(
             200,
-            json=[
-                {"date": "2026-05-05", "consumption": 123.4},
-                {"date": "2026-05-06", "consumption": 98.0},
-            ],
+            json={
+                "dailyUsageData": [
+                    {"date": "2026-05-05", "totalConsumptionLitres": "741"},
+                    {"date": "2026-05-06", "totalConsumptionLitres": "98"},
+                ],
+                "totalLitres": 839,
+            },
         ),
     )
 
@@ -170,14 +176,17 @@ async def test_get_daily_consumption_passes_query_params(client: YorkshireWaterC
     points = await client.get_daily_consumption(
         start_date="2026-05-01",
         end_date="2026-05-06",
-        unit="m3",
+        move_in_date="2004-04-19",
+        move_out_date="2026-05-06",
     )
 
     assert len(points) == 2
     request_url = daily_route.calls.last.request.url
     assert request_url.params["startDate"] == "2026-05-01"
     assert request_url.params["endDate"] == "2026-05-06"
-    assert request_url.params["unit"] == "m3"
+    assert request_url.params["moveInDate"] == "2004-04-19"
+    assert request_url.params["moveOutDate"] == "2026-05-06"
+    assert request_url.params["timePeriod"] == "1"
 
 
 @pytest.mark.asyncio

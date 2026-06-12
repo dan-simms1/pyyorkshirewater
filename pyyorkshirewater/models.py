@@ -207,25 +207,31 @@ def _coerce_bool(value: Any) -> bool:
 class DailyConsumptionPoint:
     """One day in the `daily-consumption` time series.
 
-    Field names mirror the camelCase keys the SPA's chart code reads from
-    the API response (per static analysis of the customer portal bundle):
-    `totalConsumptionLitres`, `totalConsumption` (m³ per the SPA's YEAR
-    view comparison), `totalCost`, `totalCostIncludingSewerage`,
-    `cleanWaterCost`, `isEstimatedConsumption`, `continuousFlowAlarm`.
+    Verified empirically on 2026-06-13 against a live meter. The
+    real per-day shape has: `date`, `totalConsumptionLitres`,
+    `standardTariffCleanWaterCost`, `standardTariffSewerageCost`,
+    `totalCostIncludingSewerage`, `continuousFlowAlarm`,
+    `isEstimatedConsumption`, `isMissingConsumption`.
 
-    All numeric fields are optional and may be None if the API omits them
-    or returns an empty string.
+    `total_cost` is computed as `total_cost_including_sewerage` so
+    existing callers that read `.total_cost` (for "today's full water
+    bill" type displays) keep working without re-reading the doc.
     """
 
     point_date: date | None
     total_consumption_litres: float | None
-    total_consumption_m3: float | None
-    total_cost: float | None
-    total_cost_including_sewerage: float | None
     clean_water_cost: float | None
+    sewerage_cost: float | None
+    total_cost_including_sewerage: float | None
     is_estimated: bool
+    is_missing: bool
     continuous_flow_alarm: bool
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    @property
+    def total_cost(self) -> float | None:
+        """Alias for `total_cost_including_sewerage`."""
+        return self.total_cost_including_sewerage
 
     @classmethod
     def from_api(cls, payload: dict[str, Any]) -> DailyConsumptionPoint:
@@ -234,15 +240,15 @@ class DailyConsumptionPoint:
         return cls(
             point_date=_parse_date(date_raw),
             total_consumption_litres=_coerce_float(payload.get("totalConsumptionLitres")),
-            total_consumption_m3=_coerce_float(payload.get("totalConsumption")),
-            total_cost=_coerce_float(payload.get("totalCost")),
+            clean_water_cost=_coerce_float(payload.get("standardTariffCleanWaterCost")),
+            sewerage_cost=_coerce_float(payload.get("standardTariffSewerageCost")),
             total_cost_including_sewerage=_coerce_float(
                 payload.get("totalCostIncludingSewerage")
                 or payload.get("totalCostInclSewerage")
                 or payload.get("totalCostIncSewerage"),
             ),
-            clean_water_cost=_coerce_float(payload.get("cleanWaterCost")),
             is_estimated=_coerce_bool(payload.get("isEstimatedConsumption")),
+            is_missing=_coerce_bool(payload.get("isMissingConsumption")),
             continuous_flow_alarm=_coerce_bool(payload.get("continuousFlowAlarm")),
             raw=payload,
         )

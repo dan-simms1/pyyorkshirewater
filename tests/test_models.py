@@ -75,23 +75,27 @@ def test_continuous_flow_alarm_handles_invalid_date() -> None:
 
 
 def test_daily_consumption_point_parses_full_payload() -> None:
+    """Empirically verified shape captured on 2026-06-13 against a live meter."""
     point = DailyConsumptionPoint.from_api({
-        "date": "2026-05-05",
-        "totalConsumptionLitres": "123.4",
-        "totalConsumption": "0.1234",
-        "totalCost": "45.67",
-        "totalCostIncludingSewerage": "78.9",
-        "cleanWaterCost": "12.3",
-        "isEstimatedConsumption": True,
+        "date": "2026-06-10",
+        "totalConsumptionLitres": "741",
+        "standardTariffCleanWaterCost": "1.57",
+        "standardTariffSewerageCost": "1.90",
+        "totalCostIncludingSewerage": "3.47",
+        "isEstimatedConsumption": False,
+        "isMissingConsumption": False,
         "continuousFlowAlarm": False,
     })
-    assert point.point_date == date(2026, 5, 5)
-    assert point.total_consumption_litres == pytest.approx(123.4)
-    assert point.total_consumption_m3 == pytest.approx(0.1234)
-    assert point.total_cost == pytest.approx(45.67)
-    assert point.total_cost_including_sewerage == pytest.approx(78.9)
-    assert point.clean_water_cost == pytest.approx(12.3)
-    assert point.is_estimated is True
+    assert point.point_date == date(2026, 6, 10)
+    assert point.total_consumption_litres == pytest.approx(741)
+    assert point.clean_water_cost == pytest.approx(1.57)
+    assert point.sewerage_cost == pytest.approx(1.90)
+    assert point.total_cost_including_sewerage == pytest.approx(3.47)
+    # `total_cost` is an alias for total_cost_including_sewerage for
+    # callers that read the older field name.
+    assert point.total_cost == pytest.approx(3.47)
+    assert point.is_estimated is False
+    assert point.is_missing is False
     assert point.continuous_flow_alarm is False
 
 
@@ -99,9 +103,11 @@ def test_daily_consumption_point_handles_missing() -> None:
     point = DailyConsumptionPoint.from_api({})
     assert point.point_date is None
     assert point.total_consumption_litres is None
-    assert point.total_consumption_m3 is None
+    assert point.clean_water_cost is None
+    assert point.sewerage_cost is None
     assert point.total_cost is None
     assert point.is_estimated is False
+    assert point.is_missing is False
     assert point.continuous_flow_alarm is False
 
 

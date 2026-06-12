@@ -3,6 +3,38 @@
 All notable changes to `pyyorkshirewater` are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-06-13
+
+### Fixed
+
+- **`/smartmeter/daily-consumption` finally works**. Three previously
+  undiscovered required query parameters land the endpoint: `moveInDate`
+  (the customer's account start date at the property - exposed by the
+  API as `meter-details.startDate`, despite the name actually being the
+  account open date and not when the smart meter was physically
+  installed), `moveOutDate` (today for active customers) and
+  `timePeriod=1`. Captured by watching the SPA's request when the user
+  clicks "View usage in detail". Without these the endpoint returned
+  `400 "Invalid date range."` for every other parameter combination.
+
+### Changed (breaking)
+
+- `get_daily_consumption(start_date, end_date, move_in_date,
+  move_out_date, time_period=1, meter_reference=)` replaces the
+  previous `(start_date, end_date, unit, meter_reference)` signature.
+  `unit` is dropped (the endpoint ignores it). `move_in_date` defaults
+  to the cached meter's `start_date` and `move_out_date` defaults to
+  today (UTC), so the common single-property call shortens to just
+  `start_date=, end_date=`.
+
+- `DailyConsumptionPoint` rewritten to mirror the real per-day shape
+  captured on 2026-06-13: drops `total_consumption_m3`, renames
+  `cleanWaterCost` → `standardTariffCleanWaterCost`, adds `sewerage_cost`
+  (from `standardTariffSewerageCost`) and `is_missing` (from
+  `isMissingConsumption`). `total_cost` becomes an alias for
+  `total_cost_including_sewerage` so callers reading the older name
+  keep working.
+
 ## [1.3.0] - 2026-06-12
 
 ### Changed (breaking)
