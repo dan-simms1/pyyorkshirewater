@@ -169,6 +169,22 @@ class YorkshireWaterClient:
             _LOGGER.debug("Current consumption probe failed at login: %s", err)
             self._current_consumption = None
 
+    async def refresh_token(self) -> None:
+        """Force a silent renewal of the IdP session.
+
+        Lightweight session keep-alive: runs
+        `/connect/authorize?prompt=none` + the code/token exchange to
+        get a fresh bearer token and absorb the IdP's rotated session
+        cookies, but does NOT fetch meter details, current consumption
+        or any other API data. Use this in a recurring heartbeat task
+        to reset the IdP's idle timer (observed ~30 min on 2026-06-13)
+        without spending the bandwidth of a full data refresh.
+
+        Raises `CookieSessionExpiredError` if the IdP rejects the
+        cookies as expired, same as `login()`.
+        """
+        await self._auth.force_refresh()
+
     async def get_meter_details(
         self,
         *,

@@ -3,6 +3,19 @@
 All notable changes to `pyyorkshirewater` are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-06-13
+
+### Added
+
+- **`YorkshireWaterClient.refresh_token()`** - lightweight public
+  method that runs only the silent renewal (`/connect/authorize?prompt=none`
+  plus code/token exchange) and absorbs rotated IdP cookies, without
+  the meter-details and current-consumption probes that `login()`
+  performs. For session-keep-alive heartbeats: empirical observation
+  on 2026-06-13 puts the YW IdP idle timeout around 30 minutes, and a
+  small periodic call to this method keeps the session warm so data
+  refreshes never need to reach for the browser bridge.
+
 ## [1.4.0] - 2026-06-13
 
 ### Fixed
