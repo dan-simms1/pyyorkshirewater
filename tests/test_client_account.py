@@ -6,7 +6,7 @@ import httpx
 import pytest
 import respx
 
-from pyyorkshirewater.client import YorkshireWaterClient, _first_dict
+from pyyorkshirewater.client import YorkshireWaterClient, _first_dict, _safe_text
 from pyyorkshirewater.const import (
     API_BASE_URL,
     ENDPOINT_CURRENT_CONSUMPTION,
@@ -15,6 +15,7 @@ from pyyorkshirewater.const import (
     ENDPOINT_METER_DETAILS,
     ENDPOINT_PROPERTIES,
     ENDPOINT_PROPERTIES_DETAIL,
+    ENDPOINT_YEARLY_CONSUMPTION,
     ENDPOINT_YOUR_USAGE,
 )
 from pyyorkshirewater.exceptions import (
@@ -443,3 +444,101 @@ async def test_context_manager_leaves_shared_client_open(
 )
 def test_first_dict(payload: object, expected: dict[str, object]) -> None:
     assert _first_dict(payload) == expected
+
+
+# --- explicit meter references and remaining branches -----------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_login_survives_consumption_probe_error(client: YorkshireWaterClient) -> None:
+    _wire_silent_renewal_routes()
+    respx.get(_url(ENDPOINT_METER_DETAILS)).mock(
+        return_value=httpx.Response(200, json=_meter_payload(with_meter=True)),
+    )
+    respx.get(_url(ENDPOINT_CURRENT_CONSUMPTION)).mock(return_value=httpx.Response(500))
+
+    await client.login()
+
+    assert client.meter_status is MeterStatus.PENDING_ACTIVATION
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_login_with_consumption_404_caches_empty(client: YorkshireWaterClient) -> None:
+    _wire_silent_renewal_routes()
+    respx.get(_url(ENDPOINT_METER_DETAILS)).mock(
+        return_value=httpx.Response(200, json=_meter_payload(with_meter=True)),
+    )
+    respx.get(_url(ENDPOINT_CURRENT_CONSUMPTION)).mock(return_value=httpx.Response(404))
+
+    await client.login()
+
+    assert client.meter_status is MeterStatus.PENDING_ACTIVATION
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_scoped_calls_do_not_touch_the_cache(client: YorkshireWaterClient) -> None:
+    """Explicitly scoped calls work without login() and leave the cache alone."""
+    _wire_silent_renewal_routes()
+    respx.get(_url(ENDPOINT_METER_DETAILS)).mock(
+        return_value=httpx.Response(200, json=_meter_payload(with_meter=True)),
+    )
+    respx.get(_url(ENDPOINT_CURRENT_CONSUMPTION)).mock(
+        return_value=httpx.Response(200, json=_consumption_payload(live=True)),
+    )
+    respx.get(_url(ENDPOINT_YOUR_USAGE)).mock(return_value=httpx.Response(200, json=[]))
+    respx.get(_url(ENDPOINT_DAILY_CONSUMPTION)).mock(
+        return_value=httpx.Response(200, json={"dailyUsageData": []}),
+    )
+    respx.get(_url(ENDPOINT_YEARLY_CONSUMPTION)).mock(
+        return_value=httpx.Response(200, json={"year": 2026, "monthlyConsumption": []}),
+    )
+
+    details = await client.get_meter_details(account_reference="123456789012345")
+    consumption = await client.get_current_consumption(meter_reference="WAKE-001")
+    usage = await client.get_your_usage(meter_reference="WAKE-001")
+    daily = await client.get_daily_consumption(
+        start_date="2026-10-01", end_date="2026-10-09",
+        move_in_date="2026-04-01", meter_reference="WAKE-001",
+    )
+    yearly = await client.get_yearly_consumption(year=2026, meter_reference="WAKE-001")
+
+    assert details.meter_reference == "WAKE-001"
+    assert consumption.is_meter_bau is True
+    assert usage == []
+    assert daily == []
+    assert yearly is not None
+    assert yearly.year == 2026
+    assert client.meter_status is MeterStatus.NO_METER
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_your_usage_dict_without_list_is_empty(client: YorkshireWaterClient) -> None:
+    await _live_client(client)
+    respx.get(_url(ENDPOINT_YOUR_USAGE)).mock(
+        return_value=httpx.Response(200, json={"total": 3, "label": "x"}),
+    )
+
+    assert await client.get_your_usage() == []
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_yearly_consumption_other_errors_raise(client: YorkshireWaterClient) -> None:
+    _wire_silent_renewal_routes()
+    respx.get(_url(ENDPOINT_YEARLY_CONSUMPTION)).mock(return_value=httpx.Response(500))
+
+    with pytest.raises(YorkshireWaterAPIError):
+        await client.get_yearly_consumption(year=2026, meter_reference="WAKE-001")
+
+
+def test_safe_text_handles_undecodable_body() -> None:
+    class _Undecodable:
+        @property
+        def text(self) -> str:
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    assert _safe_text(_Undecodable()) is None  # type: ignore[arg-type]

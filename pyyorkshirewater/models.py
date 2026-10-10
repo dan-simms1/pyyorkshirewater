@@ -42,17 +42,6 @@ def _parse_date(value: str | None) -> date | None:
         return None
 
 
-def _parse_datetime(value: str | None) -> datetime | None:
-    """Parse an ISO-8601 datetime string. Returns None on missing or invalid values."""
-    if not value:
-        return None
-    try:
-        # `datetime.fromisoformat` in Python 3.11 accepts trailing `Z`.
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-
-
 _US_DATETIME_FORMATS = (
     "%m/%d/%Y %I:%M:%S %p",
     "%m/%d/%Y %I:%M %p",
@@ -73,8 +62,11 @@ def _parse_alarm_datetime(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
     text = value.strip()
-    parsed = _parse_datetime(text)
-    if parsed is None:
+    parsed: datetime | None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        parsed = None
         for fmt in _US_DATETIME_FORMATS:
             try:
                 parsed = datetime.strptime(text, fmt)
@@ -96,7 +88,7 @@ def _parse_us_date(value: Any) -> date | None:
     if not isinstance(value, str) or not value:
         return None
     text = value.strip()
-    for fmt in ("%m/%d/%Y", "%-m/%-d/%Y", "%Y-%m-%d"):
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d"):
         try:
             return datetime.strptime(text, fmt).date()
         except ValueError:

@@ -292,3 +292,185 @@ async def test_revoke_clears_local_state(authenticator: Authenticator) -> None:
     # Just check revoke is a no-op on a fresh authenticator.
     await authenticator.revoke()
     assert authenticator.access_token is None
+
+
+def _redirect_with_query(query: str):
+    """Side effect that redirects to the registered URI with a fixed query."""
+    def _impl(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": f"{DEFAULT_REDIRECT_URI}?{query}"})
+    return _impl
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_queued_ensure_token_reuses_fresh_token(http_client: httpx.AsyncClient) -> None:
+    """A caller queued on the lock reuses the token the holder just fetched."""
+    import asyncio
+
+    from .conftest import make_token_set
+
+    authorize = respx.get(AUTHORIZE_ENDPOINT).mock(side_effect=_state_echo_response())
+    auth = Authenticator(http_client, cookies=dict(SAMPLE_COOKIES))
+
+    async with auth._lock:
+        waiter = asyncio.create_task(auth.ensure_token())
+        await asyncio.sleep(0)  # let it miss the fast path and queue on the lock
+        auth._tokens = make_token_set(access_token="access-held")
+
+    assert await waiter == "access-held"
+    assert authorize.call_count == 0
+    assert auth.is_authenticated is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_rotated_cookies_are_absorbed(http_client: httpx.AsyncClient) -> None:
+    def _rotate(request: httpx.Request) -> httpx.Response:
+        state = parse_qs(urlparse(str(request.url)).query)["state"][0]
+        return httpx.Response(
+            302,
+            headers=[
+                ("location", f"{DEFAULT_REDIRECT_URI}?code=code-1&state={state}"),
+                ("set-cookie", "idsrv.session=fake-rotated-value; Path=/"),
+            ],
+        )
+
+    respx.get(AUTHORIZE_ENDPOINT).mock(side_effect=_rotate)
+    respx.post(TOKEN_ENDPOINT).mock(return_value=httpx.Response(200, json=_token_response()))
+    auth = Authenticator(http_client, cookies=dict(SAMPLE_COOKIES))
+
+    await auth.login()
+
+    assert auth.cookies["idsrv.session"] == "fake-rotated-value"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_authorize_network_error(http_client: httpx.AsyncClient) -> None:
+    respx.get(AUTHORIZE_ENDPOINT).mock(side_effect=httpx.ConnectError("down"))
+    auth = Authenticator(http_client, cookies=dict(SAMPLE_COOKIES))
+
+    with pytest.raises(YorkshireWaterAuthError, match="Network error during silent renewal"):
+        await auth.login()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_redirect_without_location(http_client: httpx.AsyncClient) -> None:
+    respx.get(AUTHORIZE_ENDPOINT).mock(return_value=httpx.Response(302))
+    auth = Authenticator(http_client, cookies=dict(SAMPLE_COOKIES))
+
+    with pytest.raises(YorkshireWaterAuthError, match="no Location"):
+        await auth.login()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_redirect_without_state(http_client: httpx.AsyncClient) -> None:
+    respx.get(AUTHORIZE_ENDPOINT).mock(side_effect=_redirect_with_query("code=code-1"))
+    auth = Authenticator(http_client, cookies=dict(SAMPLE_COOKIES))
+
+    with pytest.raises(YorkshireWaterAuthError, match="did not echo the state"):
+        await auth.login()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_redirect_without_code(http_client: httpx.AsyncClient) -> None:
+    def _no_code(request: httpx.Request) -> httpx.Response:
+        state = parse_qs(urlparse(str(request.url)).query)["state"][0]
+        return httpx.Response(302, headers={"location": f"{DEFAULT_REDIRECT_URI}?state={state}"})
+
+    respx.get(AUTHORIZE_ENDPOINT).mock(side_effect=_no_code)
+    auth = Authenticator(http_client, cookies=dict(SAMPLE_COOKIES))
+
+    with pytest.raises(YorkshireWaterAuthError, match="no code parameter"):
+        await auth.login()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_token_network_error(http_client: httpx.AsyncClient) -> None:
+    respx.get(AUTHORIZE_ENDPOINT).mock(side_effect=_state_echo_response())
+    respx.post(TOKEN_ENDPOINT).mock(side_effect=httpx.ConnectError("down"))
+    auth = Authenticator(http_client, cookies=dict(SAMPLE_COOKIES))
+
+    with pytest.raises(YorkshireWaterAuthError, match="Network error during token exchange"):
+        await auth.login()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_token_non_json_success(http_client: httpx.AsyncClient) -> None:
+    respx.get(AUTHORIZE_ENDPOINT).mock(side_effect=_state_echo_response())
+    respx.post(TOKEN_ENDPOINT).mock(return_value=httpx.Response(200, text="<html></html>"))
+    auth = Authenticator(http_client, cookies=dict(SAMPLE_COOKIES))
+
+    with pytest.raises(YorkshireWaterAuthError, match="non-JSON"):
+        await auth.login()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_token_missing_fields(http_client: httpx.AsyncClient) -> None:
+    respx.get(AUTHORIZE_ENDPOINT).mock(side_effect=_state_echo_response())
+    respx.post(TOKEN_ENDPOINT).mock(
+        return_value=httpx.Response(200, json={"access_token": "access-1"}),
+    )
+    auth = Authenticator(http_client, cookies=dict(SAMPLE_COOKIES))
+
+    with pytest.raises(YorkshireWaterAuthError, match="missing required fields"):
+        await auth.login()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_token_without_scope(http_client: httpx.AsyncClient) -> None:
+    respx.get(AUTHORIZE_ENDPOINT).mock(side_effect=_state_echo_response())
+    respx.post(TOKEN_ENDPOINT).mock(
+        return_value=httpx.Response(200, json={"access_token": "access-1", "expires_in": 60}),
+    )
+    auth = Authenticator(http_client, cookies=dict(SAMPLE_COOKIES))
+
+    tokens = await auth.login()
+
+    assert tokens.scope is None
+    assert tokens.token_type == "Bearer"
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    ("response", "message"),
+    [
+        (httpx.Response(400, json={"error": "invalid_grant",
+                                   "error_description": "code expired"}),
+         "Token exchange failed; error=invalid_grant; description=code expired; status=400"),
+        (httpx.Response(500, json=["unexpected"]), "Token exchange failed; status=500"),
+        (httpx.Response(502, text="Bad Gateway"), "Token exchange failed; status=502"),
+    ],
+)
+async def test_token_error_messages(
+    http_client: httpx.AsyncClient,
+    response: httpx.Response,
+    message: str,
+) -> None:
+    respx.get(AUTHORIZE_ENDPOINT).mock(side_effect=_state_echo_response())
+    respx.post(TOKEN_ENDPOINT).mock(return_value=response)
+    auth = Authenticator(http_client, cookies=dict(SAMPLE_COOKIES))
+
+    with pytest.raises(YorkshireWaterAuthError) as err:
+        await auth.login()
+
+    assert str(err.value) == message
+    assert err.value.status_code == response.status_code
+
+
+def test_cookies_required_for_idp_returns_copy() -> None:
+    from pyyorkshirewater.auth import cookies_required_for_idp
+
+    cookies = dict(SAMPLE_COOKIES)
+    filtered = cookies_required_for_idp(cookies)
+
+    assert filtered == cookies
+    assert filtered is not cookies
