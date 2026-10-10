@@ -201,8 +201,7 @@ class Authenticator:
         self._absorb_set_cookies(authorize_response)
 
         code = self._extract_code(authorize_response, expected_state=state)
-        tokens = await self._exchange_code(code=code, verifier=verifier)
-        return tokens
+        return await self._exchange_code(code=code, verifier=verifier)
 
     def _absorb_set_cookies(self, response: httpx.Response) -> None:
         """Update self._cookies with anything the IdP rotated in this response."""
