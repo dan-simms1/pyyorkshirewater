@@ -359,7 +359,10 @@ class YorkshireWaterClient:
 
         Defaults to the cached meter reference when called without
         one. Returns None if the meter has no data for the requested
-        year (the endpoint returns 404).
+        year. YW used to answer that with HTTP 404. Since at least
+        2026-10-10 it answers HTTP 200 with an envelope instead:
+        `{"data": null, "statusCode": 204, "isSuccess": true, ...}`.
+        Both shapes map to None.
         """
         if meter_reference is None:
             self._require_live_meter()
@@ -374,7 +377,9 @@ class YorkshireWaterClient:
             if err.status_code == 404:
                 return None
             raise
-        if not isinstance(payload, dict):
+        if isinstance(payload, dict) and "statusCode" in payload and "data" in payload:
+            payload = payload["data"]
+        if not isinstance(payload, dict) or not payload.get("year"):
             return None
         return YearlyConsumption.from_api(payload)
 

@@ -3,6 +3,29 @@
 All notable changes to `pyyorkshirewater` are recorded here. The project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-10-10
+
+### Fixed
+
+- **`get_yearly_consumption()` returns None for a year with no data
+  again.** YW used to answer that with HTTP 404. It now answers HTTP
+  200 with an empty envelope (`{"data": null, "statusCode": 204,
+  "isSuccess": true, ...}`), which the client had been turning into a
+  `YearlyConsumption` with `year=None` and no months. Both shapes now
+  map to None.
+- **`ContinuousFlowAlarm.alarm_start` parses YW's real format.**
+  `alarmStartDate` arrives US-style (`M/D/YYYY`), not ISO, so it was
+  always None. US dates and date-times now parse. The `1/1/0001`
+  value YW sends when no alarm is active maps to None. US-style values
+  carry no zone, so they come back as naive datetimes.
+
+### Notes
+
+- The unscoped `meter-details` probe in `login()` now gets HTTP 400
+  ("Invalid Account Reference.") from YW. `login()` still swallows
+  that, but callers that scope their own calls can use
+  `refresh_token()` instead and skip the wasted request.
+
 ## [1.5.0] - 2026-06-13
 
 ### Added

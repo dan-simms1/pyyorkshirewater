@@ -366,3 +366,52 @@ async def test_close_does_not_revoke_anything() -> None:
     # is /connect/token from the silent renewal.
     revoke_calls = [c for c in respx.calls if "/connect/revocation" in str(c.request.url)]
     assert revoke_calls == []
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_yearly_consumption_no_data_envelope_returns_none(
+    client: YorkshireWaterClient,
+) -> None:
+    """A year with no data now comes back as HTTP 200 with an empty envelope."""
+    _wire_silent_renewal_routes()
+    respx.get(f"{API_BASE_URL}{ENDPOINT_METER_DETAILS}").mock(
+        return_value=httpx.Response(200, json=_meter_payload(with_meter=True)),
+    )
+    respx.get(f"{API_BASE_URL}{ENDPOINT_CURRENT_CONSUMPTION}").mock(
+        return_value=httpx.Response(200, json=_consumption_payload(live=True)),
+    )
+    respx.get(f"{API_BASE_URL}{ENDPOINT_YEARLY_CONSUMPTION}").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": None,
+                "statusCode": 204,
+                "errorMessage": "Yearly consumption not found for the specified year.",
+                "isSuccess": True,
+            },
+        ),
+    )
+
+    await client.login()
+    assert await client.get_yearly_consumption(year=2025) is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_yearly_consumption_404_still_returns_none(
+    client: YorkshireWaterClient,
+) -> None:
+    _wire_silent_renewal_routes()
+    respx.get(f"{API_BASE_URL}{ENDPOINT_METER_DETAILS}").mock(
+        return_value=httpx.Response(200, json=_meter_payload(with_meter=True)),
+    )
+    respx.get(f"{API_BASE_URL}{ENDPOINT_CURRENT_CONSUMPTION}").mock(
+        return_value=httpx.Response(200, json=_consumption_payload(live=True)),
+    )
+    respx.get(f"{API_BASE_URL}{ENDPOINT_YEARLY_CONSUMPTION}").mock(
+        return_value=httpx.Response(404),
+    )
+
+    await client.login()
+    assert await client.get_yearly_consumption(year=2025) is None

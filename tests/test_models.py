@@ -74,6 +74,31 @@ def test_continuous_flow_alarm_handles_invalid_date() -> None:
     assert alarm.alarm_start is None
 
 
+def test_continuous_flow_alarm_sentinel_date_is_none() -> None:
+    """YW sends "1/1/0001" when no alarm is active (seen 2026-10-10)."""
+    alarm = ContinuousFlowAlarm.from_api({
+        "alarmStartDate": "1/1/0001",
+        "continuousFlowLperH": "0",
+        "continuousFlowStandardTariffCostPerDay": "0",
+    })
+    assert alarm.alarm_start is None
+    assert alarm.continuous_flow_l_per_h == 0
+    assert alarm.cost_per_day == 0
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("10/9/2026", datetime(2026, 10, 9)),
+        ("10/9/2026 3:15:00 AM", datetime(2026, 10, 9, 3, 15)),
+        ("10/9/2026 3:15:00 PM", datetime(2026, 10, 9, 15, 15)),
+        ("10/9/2026 15:15", datetime(2026, 10, 9, 15, 15)),
+    ],
+)
+def test_continuous_flow_alarm_parses_us_dates(raw: str, expected: datetime) -> None:
+    assert ContinuousFlowAlarm.from_api({"alarmStartDate": raw}).alarm_start == expected
+
+
 def test_daily_consumption_point_parses_full_payload() -> None:
     """Empirically verified shape captured on 2026-06-13 against a live meter."""
     point = DailyConsumptionPoint.from_api({

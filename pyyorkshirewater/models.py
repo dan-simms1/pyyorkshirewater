@@ -53,6 +53,39 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return None
 
 
+_US_DATETIME_FORMATS = (
+    "%m/%d/%Y %I:%M:%S %p",
+    "%m/%d/%Y %I:%M %p",
+    "%m/%d/%Y %H:%M:%S",
+    "%m/%d/%Y %H:%M",
+    "%m/%d/%Y",
+)
+
+
+def _parse_alarm_datetime(value: Any) -> datetime | None:
+    """Parse `alarmStartDate` from `current-consumption`.
+
+    YW sends this US-style ("M/D/YYYY", observed 2026-10-10) and uses
+    "1/1/0001" when no alarm is active, so year 1 is treated as
+    missing. ISO input is still accepted. US-style values carry no
+    zone, so they come back naive rather than guessing one.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    parsed = _parse_datetime(text)
+    if parsed is None:
+        for fmt in _US_DATETIME_FORMATS:
+            try:
+                parsed = datetime.strptime(text, fmt)
+                break
+            except ValueError:
+                continue
+    if parsed is None or parsed.year <= 1:
+        return None
+    return parsed
+
+
 def _parse_us_date(value: Any) -> date | None:
     """Parse a US-style "M/D/YYYY" date string.
 
@@ -116,7 +149,7 @@ class ContinuousFlowAlarm:
     def from_api(cls, payload: dict[str, Any]) -> ContinuousFlowAlarm:
         """Build a `ContinuousFlowAlarm` from the raw API payload."""
         return cls(
-            alarm_start=_parse_datetime(payload.get("alarmStartDate")),
+            alarm_start=_parse_alarm_datetime(payload.get("alarmStartDate")),
             continuous_flow_l_per_h=_coerce_float(payload.get("continuousFlowLperH")),
             cost_per_day=_coerce_float(
                 payload.get("continuousFlowStandardTariffCostPerDay"),
